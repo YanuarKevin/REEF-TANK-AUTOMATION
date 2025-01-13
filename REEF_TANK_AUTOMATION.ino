@@ -20,12 +20,14 @@
 #define NUM_CHANNELS (NUM_REGISTERS * 4)
 
 char auth[] = "j920xDAK2OfptZGmFJ_nbdAHLg6pkld1";
-char ssid[] = "OKE-JON-1";
+char ssid[] = "ojo omong ae";
 char pass[] = "banyuwangi";
 
-bool relayStates[NUM_CHANNELS] = { false, false, false, false };  // Mulai dengan relay dimatikan (low)
-bool notificationSentDHT = false;                                 // Penanda untuk notifikasi yang sudah dikirim untuk DHT11
+bool relayStates[NUM_CHANNELS] = { false, false, false, false };
+bool notificationSentDHT = false;                      
 bool notificationSentDS18B20 = false;
+bool autoMode_fan = false;
+bool previousFanState = false;
 
 DHT dht(DHTPIN, DHTTYPE);
 OneWire oneWire(ONE_WIRE_BUS);
@@ -33,38 +35,66 @@ DallasTemperature sensors(&oneWire);
 Servo servo;
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-unsigned long previousMillis = 0;
-const long interval = 1000;  // interval dalam milidetik (misalnya 2000 = 2 detik)
-float temperatureLimit = 0;  // Inisialisasi batas suhu awal
+unsigned long previousMillis = 0; // interval waktu sekarang
+const long interval = 100;  // interval prosses
 
-// PEMBUATAN SIMBOL DERAJAT
-byte customDegreeChar[8] = { 
-  B00110,
-  B01001,
-  B01001,
-  B00110,
-  B00000,
-  B00000,
-  B00000,
-  B00000
+float temp_ruang = 0.0;
+int hum_ruang = 0;
+float tempC = 0.0;
+float temperature_max = 30.0;
+float temperature_min = 27.0;
+
+byte Derajat[8] = { 
+  0b00110,
+  0b01001,
+  0b00110,
+  0b00000,
+  0b00000,
+  0b00000,
+  0b00000,
+  0b00000
+};
+byte Termometer[8] = {
+  0b00100,
+  0b01010,
+  0b01010,
+  0b01010,
+  0b01110,
+  0b11111,
+  0b11111,
+  0b01110 
+};
+byte Air[8] = {
+  0b00100,
+  0b00100,
+  0b01110,
+  0b11111,
+  0b11111,
+  0b01110,
+  0b00000,
+  0b00000
 };
 
 void setup() {
   Serial.begin(9600);
-  Blynk.begin(auth, ssid, pass, "iot.serangkota.go.id", 8080);
+  Blynk.begin(auth, ssid, pass, "iot.serangkota.go.id", 8080); 
 
   lcd.init();
   lcd.backlight();
+  lcd.createChar(0, Derajat);
+  lcd.createChar(1, Termometer);
+  lcd.createChar(2, Air);
   lcd.setCursor(2, 0);
   lcd.print("COPYRIGHT BY");
   lcd.setCursor(2, 1);
-  lcd.print("YANUAR KEVIN");
+  lcd.print("YK REEF STORE");
   delay(5000);
   lcd.clear();
 
   pinMode(DATA_PIN, OUTPUT);
   pinMode(CLOCK_PIN, OUTPUT);
   pinMode(LATCH_PIN, OUTPUT);
+  servo.attach(SERVO_PIN);
 
   dht.begin();
   sensors.begin();
@@ -72,16 +102,16 @@ void setup() {
   for (int i = 0; i < NUM_CHANNELS; i++) {
     relayStates[i] = true;
   }
-
   updateShiftRegister();
-
-  servo.attach(SERVO_PIN);  // Menghubungkan servo ke pin yang ditentukan
 
   Blynk.syncVirtual(V0);
   Blynk.syncVirtual(V1);
   Blynk.syncVirtual(V2);
   Blynk.syncVirtual(V3);
-  Blynk.syncVirtual(V8);
+  Blynk.syncVirtual(V4);
+  Blynk.syncVirtual(V5);
+  Blynk.syncVirtual(V6);
+  Blynk.syncVirtual(V7);
 }
 
 void loop() {
@@ -89,20 +119,20 @@ void loop() {
   unsigned long currentMillis = millis();  // Ambil waktu sekarang
 
   if (currentMillis - previousMillis >= interval) {
-    // Simpan waktu sekarang sebagai waktu terakhir tindakan dilakukan
     previousMillis = currentMillis;
-
     readDHT();
     readDS18B20();
+    updateLCDDisplay();
   }
+  // updateLCDDisplay();
+  // readDHT();
+  // readDS18B20();
 }
 
 BLYNK_CONNECTED() {
-  Blynk.syncVirtual(V0);
-  Blynk.syncVirtual(V1);
-  Blynk.syncVirtual(V2);
-  Blynk.syncVirtual(V3);
-  Blynk.syncVirtual(V8);
+  for (int i = 0; i <= 7; i++) {
+    Blynk.syncVirtual(i);
+  }
 }
 
 void updateShiftRegister() {
@@ -114,7 +144,6 @@ void updateShiftRegister() {
   }
   digitalWrite(LATCH_PIN, HIGH);
 
-  // Serial print status relay
   Serial.println("Relay Status:");
   for (int i = 0; i < NUM_CHANNELS; i++) {
     Serial.print("Relay ");
@@ -125,51 +154,6 @@ void updateShiftRegister() {
 }
 
 BLYNK_WRITE(V0) {
-  int pinValue = param.asInt();  // Mendapatkan nilai dari tombol di aplikasi Blynk
-  if (pinValue == 1 || pinValue == 0) {
-    relayStates[0] = pinValue;  // Mengatur nilai relay sesuai dengan input dari Blynk
-    updateShiftRegister();
-  }
-}
-
-BLYNK_WRITE(V1) {
-  int pinValue = param.asInt();
-  if (pinValue == 1 || pinValue == 0) {
-    relayStates[1] = pinValue;
-    updateShiftRegister();
-  }
-}
-
-BLYNK_WRITE(V2) {
-  int pinValue = param.asInt();
-  if (pinValue == 1 || pinValue == 0) {
-    relayStates[2] = pinValue;
-    updateShiftRegister();
-  }
-}
-
-BLYNK_WRITE(V3) {
-  int pinValue = param.asInt();
-  if (pinValue == 1 || pinValue == 0) {
-    relayStates[3] = pinValue;
-    updateShiftRegister();
-  }
-}
-
-BLYNK_WRITE(V8) {
-  temperatureLimit = param.asFloat();  // Mendapatkan nilai batas suhu dari aplikasi Blynk
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Batas Suhu New: ");
-  lcd.setCursor(7, 1);
-  lcd.print(temperatureLimit);
-  lcd.write(1);
-  lcd.print("C");
-  delay(2000);
-  lcd.clear();
-}
-
-BLYNK_WRITE(V7) {
   int buttonState = param.asInt();
   if (buttonState == 1) {
     for (int pos = 180; pos >= 0; pos--) {  // Mengubah perulangan dari 0 derajat ke 180 derajat
@@ -178,72 +162,163 @@ BLYNK_WRITE(V7) {
     }
     servo.write(180);  // Mengembalikan servo ke posisi awal (180 derajat)
     Blynk.notify("IKAN SUDAH DIBERI PAKAN !!!");
-    Blynk.email("yanuarkevinbwi31@gmail.com", "KONTROL AQUAROIUM 1", "IKAN SUDAH DIBERI PAKAN !!!");
+    Blynk.email("yanuarkevinbwi31@gmail.com", "SMART REEF TANK", "IKAN SUDAH DIBERI PAKAN !!!");
     lcd.clear();
     lcd.setCursor(1, 0);
     lcd.print("IKAN SUDAH DI");
     lcd.setCursor(1, 1);
     lcd.print("BERI PAKAN !!!");
-    delay(4000);
+    delay(3000);
     lcd.clear();
   }
 }
 
-void readDHT() {
-  float h = dht.readHumidity();
-  float t = dht.readTemperature();
+BLYNK_WRITE(V1) {
+  int buttonState = param.asInt();
+  if (buttonState == 1 && !autoMode_fan) {
+    autoMode_fan = true;  // Aktifkan kontrol otomatis
+    Blynk.virtualWrite(V2, 1);  // Matikan tombol manual di aplikasi Blynk
+    Serial.println("Mode Otomatis Aktif");
+  } else if (buttonState == 0 && autoMode_fan) {
+    autoMode_fan = false;
+    Serial.println("Mode Otomatis Nonaktif");
+  }
+}
 
-  if (t >= 33 && !notificationSentDHT) {
+BLYNK_WRITE(V2) {
+  int pinValue = param.asInt();  // Dapatkan status tombol manual (1=ON, 0=OFF)
+  if (pinValue == 1 || pinValue == 0) {
+    if (autoMode_fan == false) {
+      relayStates[0] = pinValue;
+      updateShiftRegister();
+    }
+  }
+}
+
+BLYNK_WRITE(V3) {
+  int pinValue = param.asInt();
+  if (pinValue == 1 || pinValue == 0) {
+    relayStates[1] = pinValue;
+    updateShiftRegister();
+  }
+}
+
+BLYNK_WRITE(V4) {
+  int pinValue = param.asInt();
+  if (pinValue == 1 || pinValue == 0) {
+    relayStates[2] = pinValue;
+    updateShiftRegister();
+  }
+}
+
+BLYNK_WRITE(V5) {
+  int pinValue = param.asInt();
+  if (pinValue == 1 || pinValue == 0) {
+    relayStates[3] = pinValue;
+    updateShiftRegister();
+  }
+}
+
+// 7. SETTING SUHU MAX
+BLYNK_WRITE(V6) {
+  temperature_max = param.asFloat();  // Mendapatkan nilai dari Blynk (float / desimal)
+  Serial.print("SETTING SUHU MAX: ");
+  Serial.print(temperature_max);
+  Serial.println("°C");
+}
+// 8. SETTING SUHU MIN
+BLYNK_WRITE(V7) {
+  temperature_min = param.asFloat();
+  Serial.print("SETTING SUHU MIN: ");
+  Serial.print(temperature_min);
+  Serial.println("°C");
+}
+
+// PEMBACAAN DAN KOFIGURASI SENSOR
+void readDHT() {
+  hum_ruang = dht.readHumidity(); 
+  temp_ruang = dht.readTemperature();
+  
+  if (temp_ruang >= 33 && !notificationSentDHT) {
     Blynk.notify("Suhu Ruangan Tinggi !!!");
-    Blynk.email("yanuarkevinbwi31@gmail.com", "KONTROL AQUARIUM", "Suhu Ruangan Tinggi !!!");
+    Blynk.email("yanuarkevinbwi31@gmail.com", "SMART REEF TANK", "Suhu Ruangan Tinggi !!!");
     notificationSentDHT = true;  
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("SUHU DI RUANGAN");
-    lcd.setCursor(0, 1);
-    lcd.print("SANGAT TINGGI !!");
-    delay(4000);
-    lcd.clear();
-  } else if (t <= 30.5) {
+  } else if (temp_ruang <= 30.5 && notificationSentDHT) {
     notificationSentDHT = false;
   }
-
-  lcd.setCursor(0, 0);
-  lcd.print("SUHU RUANG: ");
-  lcd.setCursor(11, 0);
-  lcd.print(t, 1);
-  lcd.print("C");
-  Blynk.virtualWrite(V4, t);
-  Blynk.virtualWrite(V5, h);
+  Serial.print("suhu ruang: ");
+  Serial.println(temp_ruang);
+  Blynk.virtualWrite(V11, temp_ruang);
+  Blynk.virtualWrite(V12, hum_ruang);
 }
 
 void readDS18B20() {
-  sensors.requestTemperatures();             // Mulai proses pengukuran suhu
-  float tempC = sensors.getTempCByIndex(0);  // Mendapatkan suhu dalam derajat Celsius
+  sensors.requestTemperatures();  
+  tempC = sensors.getTempCByIndex(0);
 
-  if (tempC >= temperatureLimit && !notificationSentDS18B20) {
-    Blynk.virtualWrite(V0, 1); // Menyalakan V0 jika suhu melebihi batas
+  if (tempC >= temperature_max && !notificationSentDS18B20) {
     Serial.println("Suhu Air Melebihi Batas !!!");
     Blynk.notify("Suhu Air Melebihi Batas !!!");  
-    Blynk.email("yanuarkevinbwi31@gmail.com", "KONTROL AQUARIUM", "Suhu Air Melebihi Batas !!!");
-    notificationSentDS18B20 = true;  // Menandai bahwa notifikasi telah dikirimkan
-    lcd.clear();                     
-    lcd.setCursor(1, 0);
-    lcd.print("SUHU PADA AIR");  
-    lcd.setCursor(0, 1);
-    lcd.print("MELEBIHI BATAS !!");  
-    delay(4000);                     
-    lcd.clear();                     
-  } else if (tempC <= temperatureLimit - 1) {
-    Blynk.virtualWrite(V0, 0);
-    notificationSentDS18B20 = false;  // Reset penanda notifikasi jika pembacaan berhasil
+    Blynk.email("yanuarkevinbwi31@gmail.com", "SMART REEF TANK", "Suhu Air Melebihi Batas !!!");
+    notificationSentDS18B20 = true;                    
+  } else if (tempC <= temperature_min && notificationSentDS18B20) {
+    notificationSentDS18B20 = false;
   }
 
-  lcd.setCursor(0, 1);
-  lcd.print("SUHU AIR: ");
-  lcd.setCursor(9, 1);
-  lcd.print(tempC, 1);
-  lcd.write(1);
+  if (autoMode_fan) {
+    if (tempC >= temperature_max && !previousFanState) {
+      relayStates[0] = 1;  // Nyalakan relay (relay 0) jika suhu lebih dari temperature_max
+      updateShiftRegister();
+      Serial.println("Kipas Dinyalakan (Auto)");
+      previousFanState = true;  // Simpan status kipas sebagai menyala
+    } else if (tempC <= temperature_min && previousFanState) {
+      relayStates[0] = 0;
+      updateShiftRegister();
+      Serial.println("Kipas Dimatikan (Auto)");
+      previousFanState = false;
+    }
+  }
+  Serial.print("suhu air: ");
+  Serial.println(tempC);
+  Blynk.virtualWrite(V10, tempC);
+}
+
+void updateLCDDisplay() {
+
+  // Tampilan Suhu Air
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.write(byte(1));
+  lcd.print(" AIR : ");
+  lcd.print(tempC);
+  lcd.write(byte(0));
   lcd.print("C");
-  Blynk.virtualWrite(V6, tempC);
+
+  // Tampilan Suhu Ruang
+  lcd.setCursor(0, 1);
+  lcd.write(byte(1));
+  lcd.print(" RUANG : ");
+  lcd.print(temp_ruang, 1);
+  lcd.write(byte(0));
+  lcd.print("C");
+  delay(15000);  // Tunggu 15 detik
+  lcd.clear();
+
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.write(byte(1));
+  lcd.print("SET:");
+  lcd.print(temperature_min, 1);
+  lcd.print("-");
+  lcd.print(temperature_max, 1);
+  lcd.write(byte(0));
+  lcd.print("C");
+
+  // Tampilan FAN MODE
+  lcd.setCursor(0, 1);
+  lcd.print("FAN MODE: ");
+  lcd.print(autoMode_fan ? "Auto" : "Manual");
+  delay(5000);  // Tunggu 15 detik
+  lcd.clear();
 }
